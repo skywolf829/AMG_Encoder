@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=42", "wheel", "torch==2.4.1+cu124"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "AMG_Encoder"
+version = "0.0.1"
+description = "AMGSRN Encoder CUDA kernels"
+authors = [
+    { name = "Skylar Wurster", email = "swwurster@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "torch==2.4.1+cu124", 
+    "ninja==1.11.1.1",
+]
+
+[tool.pip]
+extra-index-urls = [
+    "https://download.pytorch.org/whl/cu124",
+]
