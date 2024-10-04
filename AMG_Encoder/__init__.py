@@ -1,6 +1,9 @@
 import torch
-from . import _C
 from torch.amp import custom_fwd, custom_bwd
+from ._C import createTransformationMatricesForward, \
+        createTransformationMatricesBackward, \
+        encodeForward, encodeBackward, \
+        featureDensityForward, featureDensityBackward
 
 class CreateTransformationMatricesFunction(torch.autograd.Function):
     @staticmethod
@@ -8,7 +11,7 @@ class CreateTransformationMatricesFunction(torch.autograd.Function):
     def forward(ctx, rotations, scales, translations):
         ctx.save_for_backward(rotations, scales, translations)
 
-        result = _C.createTransformationMatricesForward(rotations, scales, translations)
+        result = createTransformationMatricesForward(rotations, scales, translations)
 
         return result
 
@@ -17,7 +20,7 @@ class CreateTransformationMatricesFunction(torch.autograd.Function):
     def backward(ctx, grad_output):
         rotations, scales, translations = ctx.saved_tensors
 
-        grad_rotations, grad_scales, grad_translations = _C.createTransformationMatricesBackward(rotations, scales, translations, grad_output)
+        grad_rotations, grad_scales, grad_translations = createTransformationMatricesBackward(rotations, scales, translations, grad_output)
 
         return grad_rotations, grad_scales, grad_translations
 
@@ -28,7 +31,7 @@ class EncodeCoordinates(torch.autograd.Function):
                 scales : torch.Tensor, translations : torch.Tensor, feature_grids : torch.Tensor):
         permuted_query = query_coordinates.permute(1, 0).contiguous()
         
-        feature_vectors = _C.encodeForward(permuted_query, rotations, 
+        feature_vectors = encodeForward(permuted_query, rotations, 
                                         scales, translations, feature_grids)
         if any(ctx.needs_input_grad[1:]):  # Check if any input requires gradient
             ctx.save_for_backward(permuted_query, rotations, 
@@ -44,7 +47,7 @@ class EncodeCoordinates(torch.autograd.Function):
         query_coordinates, rotations, scales, \
             translations, feature_grids = ctx.saved_tensors
 
-        grad_feature_grids = _C.encodeBackward(query_coordinates, 
+        grad_feature_grids = encodeBackward(query_coordinates, 
             rotations, scales, translations, feature_grids, grad_output)
         
         return None, None, None, None, grad_feature_grids
@@ -52,7 +55,7 @@ class EncodeCoordinates(torch.autograd.Function):
 class FeatureDensity(torch.autograd.Function):
     @staticmethod
     def forward(ctx, query_coordinates, rotations, scales, translations):
-        density = _C.featureDensityForward(query_coordinates, rotations, 
+        density = featureDensityForward(query_coordinates, rotations, 
                                            scales, translations)
 
         # Store for use in backward
@@ -66,7 +69,7 @@ class FeatureDensity(torch.autograd.Function):
         query_coordinates, rotations, \
             scales, translations = ctx.saved_tensors
         
-        dL_dRotations, dL_dScales, dL_dTranslations = _C.featureDensityBackward(query_coordinates, 
+        dL_dRotations, dL_dScales, dL_dTranslations = featureDensityBackward(query_coordinates, 
             rotations, scales, translations, grad_output)
 
         return None, dL_dRotations, dL_dScales, dL_dTranslations
