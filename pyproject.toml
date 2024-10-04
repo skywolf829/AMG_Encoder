@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=43", "wheel", "torch>=2.0.0"]
+requires = ["setuptools>=42", "wheel", "torch==2.4.1+cu124"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,7 +10,7 @@ readme = "README.md"
 authors = [{name = "Skylar Wurster", email = "swwurster@gmail.com"}]
 license = {file = "LICENSE"}
 dependencies = [
-    "torch>=2.0.0",
+    "torch==2.4.1+cu124",
 ]
 
 [project.urls]
