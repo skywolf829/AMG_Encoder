@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=43", "wheel", "torch>=2.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "AMG_Encoder"
+version = "0.1.0"
+description = "A CUDA extension for AMGSRN's Encoder"
+readme = "README.md"
+authors = [{name = "Skylar Wurster", email = "swwurster@gmail.com"}]
+license = {file = "LICENSE"}
+dependencies = [
+    "torch>=2.0.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/skywolf829/AMG_Encoder"
+"Bug Tracker" = "https://github.com/skywolf829/AMG_Encoder/issues"
