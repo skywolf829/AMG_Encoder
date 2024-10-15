@@ -26,11 +26,26 @@ void launch_encode_forward(
     torch::Tensor& out_features);
 
 template <typename scalar_t>
+void launch_encode_forward_transform(
+    const torch::Tensor& query_points,
+    const torch::Tensor& transformation_matrices,
+    const torch::Tensor& feature_grids,
+    torch::Tensor& out_features);
+
+template <typename scalar_t>
 void launch_encode_backward(
     const torch::Tensor& query_points,
     const torch::Tensor& rotations,
     const torch::Tensor& scales,
     const torch::Tensor& translations,
+    const torch::Tensor& feature_grids,
+    const torch::Tensor& dL_dFeatureVectors,
+    torch::Tensor& dL_dFeatureGrids);
+
+template <typename scalar_t>
+void launch_encode_backward_transform(
+    const torch::Tensor& query_points,
+    const torch::Tensor& transformation_matrices,
     const torch::Tensor& feature_grids,
     const torch::Tensor& dL_dFeatureVectors,
     torch::Tensor& dL_dFeatureGrids);
@@ -44,6 +59,12 @@ void launch_density_forward(
     torch::Tensor& density);
 
 template <typename scalar_t>
+void launch_density_forward_transform(
+    const torch::Tensor& query_points,
+    const torch::Tensor& transformation_matrices,
+    torch::Tensor& density);
+
+template <typename scalar_t>
 void launch_density_backward(
     const torch::Tensor& query_points,
     const torch::Tensor& rotations,
@@ -53,3 +74,10 @@ void launch_density_backward(
     torch::Tensor& dL_dRotations,
     torch::Tensor& dL_dScales,
     torch::Tensor& dL_dTranslations);
+
+template <typename scalar_t>
+void launch_density_backward_transform(
+    const torch::Tensor& query_points,
+    const torch::Tensor& transformation_matrices,
+    const torch::Tensor& dL_dDensity,
+    torch::Tensor& dL_dTransformationMatrices);
