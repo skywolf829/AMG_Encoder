@@ -76,33 +76,6 @@ torch::Tensor encode_forward(
     return out_features;
 }
 
-torch::Tensor encode_forward_transform(
-    const torch::Tensor& query_points,
-    const torch::Tensor& transformation_matrices,
-    const torch::Tensor& feature_grids)
-{
-    const auto num_points = query_points.size(1);
-    const auto num_grids = feature_grids.size(0);
-    const auto features_per_grid = feature_grids.size(1);
-    const auto D = feature_grids.size(2);
-    const auto H = feature_grids.size(3);
-    const auto W = feature_grids.size(4);    
-
-    auto options = torch::TensorOptions().dtype(query_points.dtype()).device(query_points.device());
-
-    torch::Tensor out_features = torch::empty({num_points, num_grids*features_per_grid}, options);
-
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(query_points.scalar_type(), "launch_encode_forward_transform", ([&] {
-        launch_encode_forward_transform<scalar_t>(
-            query_points, 
-            transformation_matrices,
-            feature_grids, 
-            out_features
-        );
-    }));
-
-    return out_features;
-}
 
 torch::Tensor encode_backward(
     const torch::Tensor& query_points,
@@ -138,35 +111,6 @@ torch::Tensor encode_backward(
     return dL_dFeatureGrids;
 }
 
-torch::Tensor encode_backward_transform(
-    const torch::Tensor& query_points,
-    const torch::Tensor& transformation_matrices,
-    const torch::Tensor& feature_grids,
-    const torch::Tensor& dL_dFeatureVectors)
-{
-    const auto num_points = query_points.size(1);
-    const auto num_grids = feature_grids.size(0);
-    const auto features_per_grid = feature_grids.size(1);
-    const auto D = feature_grids.size(2);
-    const auto H = feature_grids.size(3);
-    const auto W = feature_grids.size(4);    
-
-    auto options = torch::TensorOptions().dtype(query_points.dtype()).device(query_points.device());
-
-    torch::Tensor dL_dFeatureGrids = torch::zeros({num_grids, features_per_grid, D, H, W}, options);
-
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(query_points.scalar_type(), "launch_encode_backward_transform", ([&] {
-        launch_encode_backward_transform<scalar_t>(
-            query_points, 
-            transformation_matrices,
-            feature_grids, 
-            dL_dFeatureVectors,         
-            dL_dFeatureGrids
-        );
-    }));
-
-    return dL_dFeatureGrids;
-}
 
 torch::Tensor feature_density_forward(
     const torch::Tensor& query_points,
@@ -191,24 +135,6 @@ torch::Tensor feature_density_forward(
     return density;
 }
 
-torch::Tensor feature_density_forward_transform(
-    const torch::Tensor& query_points,
-    const torch::Tensor& transformation_matrices)
-{
-    const auto num_points = query_points.size(0);
-    auto options = torch::TensorOptions().dtype(query_points.dtype()).device(query_points.device());
-    torch::Tensor density = torch::empty({num_points}, options);
-
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(query_points.scalar_type(), "launch_density_forward_transform", ([&] {
-        launch_density_forward_transform<scalar_t>(
-            query_points, 
-            transformation_matrices, 
-            density
-        );
-    }));
-
-    return density;
-}
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> feature_density_backward(
     const torch::Tensor& query_points,
@@ -240,37 +166,12 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> feature_density_backward
     return std::make_tuple(dL_dRotations, dL_dScales, dL_dTranslations);
 }
 
-torch::Tensor feature_density_backward_transform(
-    const torch::Tensor& query_points,
-    const torch::Tensor& transformation_matrices,
-    const torch::Tensor& dL_dDensity)
-{
-    const auto num_grids = transformation_matrices.size(0);
-    const auto num_points = query_points.size(0);
-    auto options = torch::TensorOptions().dtype(query_points.dtype()).device(query_points.device());
-
-    torch::Tensor dL_dTransformationMatrices = torch::empty({num_grids, 3, 4}, options);
-    
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(query_points.scalar_type(), "launch_density_backward_transform", ([&] {
-        launch_density_backward_transform<scalar_t>(
-            query_points, 
-            transformation_matrices,
-            dL_dDensity,
-            dL_dTransformationMatrices
-        );
-    }));
-    return dL_dTransformationMatrices;
-}
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("encodeForward", &encode_forward, "Encode positions to feature vectors (forward)");
-    m.def("encodeForwardTransform", &encode_forward_transform, "Encode positions to feature vectors (forward)");
     m.def("encodeBackward", &encode_backward, "Encode positions to feature vectors (backward)");    
-    m.def("encodeBackwardTransform", &encode_backward_transform, "Encode positions to feature vectors (backward transform)");
     m.def("featureDensityForward", &feature_density_forward, "Estimate feature density for points (forward)");
-    m.def("featureDensityForwardTransform", &feature_density_forward_transform, "Estimate feature density for points (forward transform)");
     m.def("featureDensityBackward", &feature_density_backward, "Estimate feature density for points (backward)");
-    m.def("featureDensityBackwardTransform", &feature_density_backward_transform, "Estimate feature density for points (backward transform)");
 
     m.def("createTransformationMatricesForward", &create_transformation_matrices, "Create transformation matrices (forward)");
     m.def("createTransformationMatricesBackward", &create_transformation_matrices_backward, "Create transformation matrices (backward)");

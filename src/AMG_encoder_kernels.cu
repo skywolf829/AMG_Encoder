@@ -362,55 +362,6 @@ __global__ void encodeForwardKernel(
 }
 
 template <typename scalar_t>
-__global__ void encodeForwardTransformKernel(
-    const at::PackedTensorAccessor32<scalar_t,2,torch::RestrictPtrTraits> query_points,
-    const at::PackedTensorAccessor32<scalar_t,3,torch::RestrictPtrTraits> transformation_matrices,
-    const at::PackedTensorAccessor32<scalar_t,5,torch::RestrictPtrTraits> feature_grids,
-    at::PackedTensorAccessor32<scalar_t,2,torch::RestrictPtrTraits> output_features) {
-
-    const auto point_idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (point_idx >= query_points.size(1)) return;
-
-    const scalar_t3<scalar_t> point = make_scalar_t3<scalar_t>(
-        query_points[0][point_idx], 
-        query_points[1][point_idx], 
-        query_points[2][point_idx]);
-
-    __shared__ scalar_t shared_translations[3];
-    __shared__ scalar_t shared_rotations[9];
-
-    for (int grid_idx = 0; grid_idx < feature_grids.size(0); ++grid_idx) {
-        // Load translations and rotations into shared memory
-        auto r = (threadIdx.x-3) / 4;
-        auto c = (threadIdx.x-3) % 4;
-        // Load translations and rotations into shared memory
-        if (threadIdx.x < 12) {    
-            if(c == 3) shared_translations[r] = transformation_matrices[grid_idx][r][c];
-            else shared_rotations[r*3+c] = transformation_matrices[grid_idx][r][c];
-        }
-        __syncthreads();
-
-        const scalar_t3<scalar_t> point_t = transformPoint<scalar_t>(
-            shared_rotations,
-            shared_translations,
-            point
-        );
-        
-        trilinearInterpolate<scalar_t>(
-            grid_idx,
-            point_idx,
-            feature_grids,
-            point_t,
-            output_features
-        );
-
-        __syncthreads();
-    }
-    
-}
-
-template <typename scalar_t>
 __global__ void encodeBackwardKernel(
     const at::PackedTensorAccessor32<scalar_t,2,torch::RestrictPtrTraits> query_points,
     const scalar_t* rotation_matrices,
@@ -447,41 +398,6 @@ __global__ void encodeBackwardKernel(
     
 }
 
-template <typename scalar_t>
-__global__ void encodeBackwardTransformKernel(
-    const at::PackedTensorAccessor32<scalar_t,2,torch::RestrictPtrTraits> query_points,
-    const at::PackedTensorAccessor32<scalar_t,3,torch::RestrictPtrTraits> transformation_matrices,
-    const at::PackedTensorAccessor32<scalar_t,5,torch::RestrictPtrTraits> feature_grids,
-    const at::PackedTensorAccessor32<scalar_t,2,torch::RestrictPtrTraits> dL_dFeatureVectors,
-    at::PackedTensorAccessor32<scalar_t,5,torch::RestrictPtrTraits> dL_dFeatureGrids) {
-
-    const auto point_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (point_idx >= query_points.size(1)) return;
-
-    __shared__ scalar_t shared_translations[3];
-    __shared__ scalar_t shared_rotations[9];
-
-    const scalar_t3<scalar_t> point = make_scalar_t3<scalar_t>(query_points[0][point_idx], query_points[1][point_idx], query_points[2][point_idx]);
-
-    for (int grid_idx = 0; grid_idx < feature_grids.size(0); ++grid_idx) {
-        auto r = (threadIdx.x-3) / 4;
-        auto c = (threadIdx.x-3) % 4;
-        // Load translations and rotations into shared memory
-        if (threadIdx.x < 12) {    
-            if(c == 3) shared_translations[r] = transformation_matrices[grid_idx][r][c];
-            else shared_rotations[r*3+c] = transformation_matrices[grid_idx][r][c];
-        }
-        __syncthreads();
-
-        const scalar_t3<scalar_t> point_t = transformPoint<scalar_t>(shared_rotations, shared_translations, point);
-        
-        trilinearInterpolateBackwards<scalar_t>(grid_idx, point_idx, dL_dFeatureGrids, 
-            point_t, dL_dFeatureVectors);
-
-        __syncthreads();
-    }
-    
-}
 
 
 template <typename scalar_t>
@@ -501,6 +417,7 @@ __global__ void densityForwardKernel(
         query_points[idx][2]
     );
 
+    
     for(int i = 0; i < translations.size(0); ++i){
         const scalar_t* rotation_matrix = &rotation_matrices[i * 9];
         const scalar_t3<scalar_t> translation = make_scalar_t3<scalar_t>(
@@ -508,64 +425,14 @@ __global__ void densityForwardKernel(
             translations[i][1],
             translations[i][2]
         );
-
         const scalar_t3<scalar_t> point_t = transformPoint<scalar_t>(rotation_matrix, translation, point);
+        float x = static_cast<float>(point_t.x);
+        float y = static_cast<float>(point_t.y);
+        float z = static_cast<float>(point_t.z);
 
         scalar_t det = rotation_matrix[0] * (rotation_matrix[4]*rotation_matrix[8]-rotation_matrix[5]*rotation_matrix[7]) -
                        rotation_matrix[1] * (rotation_matrix[3]*rotation_matrix[8]-rotation_matrix[5]*rotation_matrix[6]) +
                        rotation_matrix[2] * (rotation_matrix[3]*rotation_matrix[7]-rotation_matrix[4]*rotation_matrix[6]); 
-        float x = static_cast<float>(point_t.x);
-        float y = static_cast<float>(point_t.y);
-        float z = static_cast<float>(point_t.z);
-        float g = __expf(-(powf(x, 20.0f) + powf(y, 20.0f) + powf(z, 20.0f)));
-        scalar_t g_scalar = static_cast<scalar_t>(g);
-        density += det * g_scalar;
-    }
-    output_density[idx] = density;
-}
-
-template <typename scalar_t>
-__global__ void densityForwardTransformKernel(
-    const at::PackedTensorAccessor32<scalar_t,2,torch::RestrictPtrTraits> query_points,
-    const at::PackedTensorAccessor32<scalar_t,3,torch::RestrictPtrTraits> transformation_matrices,
-    at::PackedTensorAccessor32<scalar_t,1,torch::RestrictPtrTraits> output_density) {
-
-    auto idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= query_points.size(0)) return;
-    
-    scalar_t density = static_cast<scalar_t>(0.0);
-    const scalar_t3<scalar_t> point = make_scalar_t3<scalar_t>(
-        query_points[idx][0],
-        query_points[idx][1],
-        query_points[idx][2]
-    );
-
-    for(int i = 0; i < transformation_matrices.size(0); ++i){
-        const scalar_t rotation_matrix[9] = {
-            transformation_matrices[i][0][0],
-            transformation_matrices[i][0][1],
-            transformation_matrices[i][0][2],
-            transformation_matrices[i][1][0],
-            transformation_matrices[i][1][1],
-            transformation_matrices[i][1][2],
-            transformation_matrices[i][2][0],
-            transformation_matrices[i][2][1],
-            transformation_matrices[i][2][2]
-        };
-        const scalar_t3<scalar_t> translation = make_scalar_t3<scalar_t>(
-            transformation_matrices[i][0][3],
-            transformation_matrices[i][1][3],
-            transformation_matrices[i][2][3]
-        );
-
-        const scalar_t3<scalar_t> point_t = transformPoint<scalar_t>(rotation_matrix, translation, point);
-
-        scalar_t det = rotation_matrix[0] * (rotation_matrix[4]*rotation_matrix[8]-rotation_matrix[5]*rotation_matrix[7]) -
-                       rotation_matrix[1] * (rotation_matrix[3]*rotation_matrix[8]-rotation_matrix[5]*rotation_matrix[6]) +
-                       rotation_matrix[2] * (rotation_matrix[3]*rotation_matrix[7]-rotation_matrix[4]*rotation_matrix[6]); 
-        float x = static_cast<float>(point_t.x);
-        float y = static_cast<float>(point_t.y);
-        float z = static_cast<float>(point_t.z);
         float g = __expf(-(powf(x, 20.0f) + powf(y, 20.0f) + powf(z, 20.0f)));
         scalar_t g_scalar = static_cast<scalar_t>(g);
         density += det * g_scalar;
@@ -679,109 +546,6 @@ __global__ void densityBackwardKernel(
         }
         else if(threadIdx.x < 12){
             gpuAtomicAdd(&dL_dTranslations[i][threadIdx.x-9], static_cast<scalar_t>(shared_sum[threadIdx.x]));            
-        }
-    }
-}
-
-template <typename scalar_t>
-__global__ void densityBackwardTransformKernel(
-    const at::PackedTensorAccessor32<scalar_t,2,torch::RestrictPtrTraits> query_points,
-    const at::PackedTensorAccessor32<scalar_t,3,torch::RestrictPtrTraits> transformation_matrices,
-    const at::PackedTensorAccessor32<scalar_t,1,torch::RestrictPtrTraits> dL_dDensity,
-    at::PackedTensorAccessor32<scalar_t,3,torch::RestrictPtrTraits> dL_dTransformationMatrices) {
-    
-    auto idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    __shared__ float shared_grads[THREADS_PER_BLOCK * 12];
-    __shared__ float shared_sum[12];
-    extern __shared__ float M[];
-
-    auto s = threadIdx.x*12;
-
-    float3 point;
-    float dL_dD;
-    if(idx < query_points.size(0)){
-        point = make_float3(
-            static_cast<float>(query_points[idx][0]),
-            static_cast<float>(query_points[idx][1]),
-            static_cast<float>(query_points[idx][2])
-        );
-        dL_dD = static_cast<float>(dL_dDensity[idx]);
-    }
-    __syncthreads();
-    for(int i = threadIdx.x; i < transformation_matrices.size(0)*12; i+=THREADS_PER_BLOCK){
-        auto g = i/12;
-        auto r = (i/12)%3;  
-        auto c = i%3;
-        M[i] = static_cast<float>(transformation_matrices[g][r][c]);
-    }
-    __syncthreads();
-
-    for(int i = 0; i<transformation_matrices.size(0); ++i){
-        auto o = i*12;
-        if (idx < query_points.size(0)){
-            float3 point_t = make_float3(
-                M[o + 0] * point.x + M[o + 1] * point.y + M[o + 2] * point.z + M[o + 3],
-                M[o + 4] * point.x + M[o + 5] * point.y + M[o + 6] * point.z + M[o + 7],
-                M[o + 8] * point.x + M[o + 9] * point.y + M[o + 10] * point.z + M[o + 11]
-            );
-
-            float det1 = M[o + 5]*M[o + 10]-M[o + 6]*M[o + 9];
-            float det2 = M[o + 4]*M[o + 10]-M[o + 6]*M[o + 8];
-            float det3 = M[o + 4]*M[o + 9]-M[o + 8]*M[o + 5];
-            float det = M[o + 0] * det1 -
-                        M[o + 1] * det2 +
-                        M[o + 2] * det3; 
-            
-            float tx19 = powf(point_t.x, 19.0f);
-            float ty19 = powf(point_t.y, 19.0f);
-            float tz19 = powf(point_t.z, 19.0f); 
-
-            float g = expf(-(powf(point_t.x, 20.0f) + powf(point_t.y, 20.0f) + powf(point_t.z, 20.0f)));
-            float det20g = -20.0f * det * g;
-
-            shared_grads[s + 0] = dL_dD*det20g * tx19 * point.x +
-                    dL_dD*g * det1;
-            shared_grads[s + 1] = dL_dD*det20g * tx19 * point.y +
-                    dL_dD*g * -det2; 
-            shared_grads[s + 2] = dL_dD*det20g * tx19 * point.z +
-                    dL_dD*g * det3; 
-                    
-            shared_grads[s + 3] = dL_dD*det20g * tx19;
-
-            shared_grads[s + 4] = dL_dD*det20g * ty19 * point.x +
-                    dL_dD*g * (-M[o + 1]*M[o + 10] + M[o+2]*M[o+9]);
-            shared_grads[s + 5] = dL_dD*det20g * ty19 * point.y +
-                    dL_dD*g * (M[o+0]*M[o + 10] - M[o+2]*M[o+8]);
-            shared_grads[s + 6] = dL_dD*det20g * ty19 * point.z +
-                    dL_dD*g * (-M[o+0]*M[o + 9] + M[o+1]*M[o+8]);
-            shared_grads[s + 7] = dL_dD*det20g * ty19;
-
-            shared_grads[s + 8] = dL_dD*det20g * tz19 * point.x +
-                    dL_dD*g * (M[o+1]*M[o + 6] - M[o+2]*M[o+5]);
-            shared_grads[s + 9] = dL_dD*det20g * tz19 * point.y +
-                    dL_dD*g * (-M[o+0]*M[o + 6] + M[o+2]*M[o+4]);
-            shared_grads[s + 10] = dL_dD*det20g * tz19 * point.z +
-                    dL_dD*g * (M[o+0]*M[o + 5] - M[o+1]*M[o+4]);
-            shared_grads[s + 11] = dL_dD*det20g * tz19;
-        
-        }
-        else{
-            for(int j = 0; j<12; ++j) shared_grads[s+j]=0.0f;
-        }
-       
-        __syncthreads();
-        if (threadIdx.x < 12) { 
-            shared_sum[threadIdx.x] = 0.0f;
-            for (int j = 0; j < THREADS_PER_BLOCK; j++) {
-                shared_sum[threadIdx.x] += shared_grads[j * 12 + threadIdx.x];
-            }
-        }
-        __syncthreads();
-        if (threadIdx.x < 12) {
-            auto r = threadIdx.x%4;
-            auto c = threadIdx.x/4;
-            gpuAtomicAdd(&dL_dTransformationMatrices[i][r][c], static_cast<scalar_t>(shared_sum[threadIdx.x]));
         }
     }
 }
@@ -956,7 +720,7 @@ __global__ void rotationMatrixBackward(
     // Load data into shared memory
     if (tid < 4) s_quaternions[tid] = quaternions[idx][tid];
     else if (tid < 7) s_scales[tid-4] = scales[idx][tid-4];
-    else if (tid < 18) s_dMatrix[tid-11] = dMatrix[idx * 9 + tid-11];
+    else if (tid < 18) s_dMatrix[tid-7] = dMatrix[idx * 9 + tid-7];
     __syncthreads();
 
     scalar_t qx = s_quaternions[0], qy = s_quaternions[1], qz = s_quaternions[2], qw = s_quaternions[3];
@@ -1086,31 +850,6 @@ void launch_encode_forward(
 }
 
 template <typename scalar_t>
-void launch_encode_forward_transform(
-    const torch::Tensor& query_points,
-    const torch::Tensor& transformation_matrices,
-    const torch::Tensor& feature_grids,
-    torch::Tensor& output_features)
-{
-    const int num_points = query_points.size(1);
-    const int num_grids = transformation_matrices.size(0);
-
-    dim3 threadsPerBlock(9);
-    dim3 numBlocks(num_grids);
-    threadsPerBlock.x = THREADS_PER_BLOCK;
-    threadsPerBlock.y = 1;
-    numBlocks.x = (num_points + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-    numBlocks.y = 1;
-    encodeForwardTransformKernel<<<numBlocks, threadsPerBlock>>>(
-        query_points.packed_accessor32<scalar_t,2,torch::RestrictPtrTraits>(),
-        transformation_matrices.packed_accessor32<scalar_t,3,torch::RestrictPtrTraits>(),
-        feature_grids.packed_accessor32<scalar_t,5,torch::RestrictPtrTraits>(),
-        output_features.packed_accessor32<scalar_t,2,torch::RestrictPtrTraits>()
-    );
-
-}
-
-template <typename scalar_t>
 void launch_encode_backward(
     const torch::Tensor& query_points,
     const torch::Tensor& rotations,
@@ -1151,30 +890,6 @@ void launch_encode_backward(
     // Free the allocated memory
     cudaFree(rotation_matrices);
 }
-
-template <typename scalar_t>
-void launch_encode_backward_transform(
-    const torch::Tensor& query_points,
-    const torch::Tensor& transformation_matrices,
-    const torch::Tensor& feature_grids,
-    const torch::Tensor& dL_dFeature_vectors,
-    torch::Tensor& dL_dFeatureGrids)
-{
-    const int num_points = query_points.size(1);
-    const int num_grids = transformation_matrices.size(0);
-
-    dim3 threadsPerBlock(THREADS_PER_BLOCK);
-    dim3 numBlocks((num_points + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
-    encodeBackwardTransformKernel<<<numBlocks, threadsPerBlock>>>(
-        query_points.packed_accessor32<scalar_t,2,torch::RestrictPtrTraits>(),
-        transformation_matrices.packed_accessor32<scalar_t,3,torch::RestrictPtrTraits>(),
-        feature_grids.packed_accessor32<scalar_t,5,torch::RestrictPtrTraits>(),
-        dL_dFeature_vectors.packed_accessor32<scalar_t,2,torch::RestrictPtrTraits>(),
-        dL_dFeatureGrids.packed_accessor32<scalar_t,5,torch::RestrictPtrTraits>()
-    );
-    
-}
-
 template <typename scalar_t>
 void launch_density_forward(
     const torch::Tensor& query_points,
@@ -1208,27 +923,6 @@ void launch_density_forward(
 
     // Free the allocated memory
     cudaFree(rotation_matrices);
-}
-
-template <typename scalar_t>
-void launch_density_forward_transform(
-    const torch::Tensor& query_points,
-    const torch::Tensor& transformation_matrices,
-    torch::Tensor& output_density) {
-
-    const int num_points = query_points.size(0);
-    const int num_grids = transformation_matrices.size(0);
-
-    dim3 threadsPerBlock(9);
-    dim3 numBlocks(num_grids);
-
-    dim3 blocksPerGrid = (num_points + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-    densityForwardTransformKernel<scalar_t><<<blocksPerGrid, THREADS_PER_BLOCK>>>(
-        query_points.packed_accessor32<scalar_t,2,torch::RestrictPtrTraits>(),
-        transformation_matrices.packed_accessor32<scalar_t,3,torch::RestrictPtrTraits>(),
-        output_density.packed_accessor32<scalar_t,1,torch::RestrictPtrTraits>()
-    );
-
 }
 
 template <typename scalar_t>
@@ -1287,28 +981,6 @@ void launch_density_backward(
     cudaFree(dL_dRotation_matrices);
 }
 
-template <typename scalar_t>
-void launch_density_backward_transform(
-    const torch::Tensor& query_points,
-    const torch::Tensor& transformation_matrices,
-    const torch::Tensor& dL_dDensity,
-    torch::Tensor& dL_dTransformationMatrices) {
-
-    const int num_points = query_points.size(0);
-    const int num_grids = transformation_matrices.size(0);
-
-    dim3 threadsPerBlock(9);
-    dim3 numBlocks(num_grids);
-    
-    dim3 blocksPerGrid = (num_points + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-    densityBackwardTransformKernel<scalar_t><<<blocksPerGrid, THREADS_PER_BLOCK, num_grids*12*sizeof(float)>>>(
-        query_points.packed_accessor32<scalar_t,2,torch::RestrictPtrTraits>(),
-        transformation_matrices.packed_accessor32<scalar_t,3,torch::RestrictPtrTraits>(),
-        dL_dDensity.packed_accessor32<scalar_t,1,torch::RestrictPtrTraits>(),
-        dL_dTransformationMatrices.packed_accessor32<scalar_t,3,torch::RestrictPtrTraits>()
-    );
-}
-
 template void launch_density_forward<float>(const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
 template void launch_density_forward<double>(const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
 template void launch_density_forward<c10::Half>(const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);   
@@ -1324,21 +996,3 @@ template void launch_encode_forward<c10::Half>(const at::Tensor&, const at::Tens
 template void launch_encode_backward<float>(const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
 template void launch_encode_backward<double>(const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
 template void launch_encode_backward<c10::Half>(const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
-
-template void launch_encode_forward_transform<float>( const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
-template void launch_encode_forward_transform<double>( const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
-template void launch_encode_forward_transform<c10::Half>( const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
-
-template void launch_encode_backward_transform<float>( const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
-template void launch_encode_backward_transform<double>( const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
-template void launch_encode_backward_transform<c10::Half>( const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
-
-template void launch_density_forward_transform<float>(const at::Tensor&, const at::Tensor&, at::Tensor&);
-template void launch_density_forward_transform<double>(const at::Tensor&, const at::Tensor&, at::Tensor&);
-template void launch_density_forward_transform<c10::Half>(const at::Tensor&, const at::Tensor&, at::Tensor&);
-
-template void launch_density_backward_transform<float>(const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
-template void launch_density_backward_transform<double>(const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
-template void launch_density_backward_transform<c10::Half>(const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&);
-
-
